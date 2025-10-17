@@ -6,6 +6,8 @@ import asyncio
 import os
 from typing import List
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urljoin
+import json
 
 limit = asyncio.Semaphore(20)
 
@@ -17,30 +19,52 @@ class NewsScraper:
     max_retries: int = 3
     timeout: int = 30
 
-    async def fetch(self, url, params):
-        headers = {
-            'user-agent': self.user_agent,
-        }
+    async def fetch(self, url, params, payload=None):
+        if payload:
+            headers = {
+                'x-algolia-api-key': 'a74cdcfcc2c69b5dabb4d13c4ce52788',
+                'x-algolia-application-id': 'U2CIAZRCAD',
+                'Referer': 'https://www.tempo.co/',
+                'content-type': 'application/x-www-form-urlencoded'
+            }
+            async with AsyncClient(headers=headers, timeout=self.timeout) as aclient:
+                async with limit:
+                    try:
+                        response = await aclient.post(
+                            url,
+                            follow_redirects=True,
+                            params=params,
+                            json=payload
+                        )
+                        print(f"Fetched {url} - Status: {response.status_code}")
+                        response.raise_for_status()
+                        return url, response.text
+                    except Exception as e:
+                        print(f"Error fetching {url}: {e}")
+                        raise
+        else:
+            headers = {
+                'user-agent': self.user_agent,
+            }
+            async with AsyncClient(headers=headers, timeout=self.timeout) as aclient:
+                async with limit:
+                    try:
+                        response = await aclient.get(
+                            url,
+                            follow_redirects=True,
+                            params=params
+                        )
+                        print(f"Fetched {url} - Status: {response.status_code}")
+                        response.raise_for_status()
+                        return url, response.text
+                    except Exception as e:
+                        print(f"Error fetching {url}: {e}")
+                        raise
 
-        async with AsyncClient(headers=headers, timeout=self.timeout) as aclient:
-            async with limit:
-                try:
-                    response = await aclient.get(
-                        url,
-                        follow_redirects=True,
-                        params=params
-                    )
-                    print(f"Fetched {url} - Status: {response.status_code}")
-                    response.raise_for_status()
-                    return url, response.text
-                except Exception as e:
-                    print(f"Error fetching {url}: {e}")
-                    raise
-
-    async def fetch_with_retries(self, url, params):
+    async def fetch_with_retries(self, url, params, payload=None):
         for attempt in range(self.max_retries):
             try:
-                return await self.fetch(url, params)
+                return await self.fetch(url, params, payload=payload)
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed for {url}: {e}")
                 if attempt == self.max_retries - 1:
@@ -48,10 +72,40 @@ class NewsScraper:
                     return url, None
                 await asyncio.sleep(2 ** attempt)
 
-    async def fetch_all(self, urls, mode='news', params=None):
+    async def fetch_all(self, urls, mode='news', search_terms='', last_date=''):
         tasks = []
         for url in urls:
-            task = asyncio.create_task(self.fetch_with_retries(url, params))
+            payload = None
+            if url == 'https://search.kompas.com/search':
+                params = {
+                    'q': search_terms,
+                    'site_id': 'all',
+                    'last_date': last_date,
+                    'sort': 'latest'
+                }
+            elif url == 'https://www.detik.com/search/searchall':
+                params = {
+                    'query': search_terms,
+                    'result_type': 'latest',
+                    'fromdatex': datetime.strptime(last_date, '%Y-%m-%d').strftime('%d/%m/%Y'),
+                    'todatex': (datetime.strptime(last_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%d/%m/%Y'),
+                }
+            elif url == 'https://www.tempo.co/search':
+                params = {
+                    'q': search_terms,
+                    'page': 1,
+                    'x-algolia-agent': 'Algolia for JavaScript (4.24.0); Browser',
+                }
+
+                payload = {
+                    "query":search_terms,
+                    "filters":"NOT unpublished_at",
+                    "hitsPerPage":10,
+                    "page":0
+                }
+
+                url = 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query'
+            task = asyncio.create_task(self.fetch_with_retries(url, params, payload=payload))
             tasks.append(task)
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -97,26 +151,32 @@ class NewsScraper:
             print('Mode is not available')
 
     def parse_news_urls(self, result):
+        news_urls = []
         if result[0] == 'https://search.kompas.com/search':
             tree = HTMLParser(result[1])
             news_elems = tree.css('a.article-link')
-            news_urls = []
-            for elem in news_elems:
-                news_url = elem.attributes.get('href')
-                news_urls.append(news_url)
-            return news_urls
+                
+        elif result[0] == 'https://www.detik.com/search/searchall':
+            tree = HTMLParser(result[1])
+            news_elems = tree.css('h3.media__title > a.media__link')
+            
+        elif result[0] == 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query':
+            news_elems = json.loads(result[1]).get('hits', [])
+
         else:
             print('under construction')
 
-    def get_news_urls(self, search_terms, last_date):
-        params = {
-            'q': search_terms,
-            'site_id': 'all',
-            'last_date': last_date,
-            'sort': 'latest'
-        }
+        for elem in news_elems:
+            if result[0] == 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query':
+                news_url = urljoin('https://www.tempo.co/', elem.get('canonical_url'))
+            else:
+                news_url = elem.attributes.get('href')
+            news_urls.append(news_url)
 
-        news_urls = asyncio.run(scraper.fetch_all(self.base_urls, mode='search', params=params))
+        return news_urls
+
+    def get_news_urls(self, search_terms, last_date):
+        news_urls = asyncio.run(scraper.fetch_all(self.base_urls, mode='search', last_date=last_date, search_terms=search_terms))
 
         return news_urls
 
@@ -124,8 +184,10 @@ class NewsScraper:
         asyncio.run(scraper.fetch_all(news_urls, mode='news'))
 
 if __name__ == '__main__':
-    # 'https://www.detik.com/', 'https://www.tempo.co/', 'https://www.cnnindonesia.com/', 'https://www.liputan6.com/']
-    news_portal = ['https://search.kompas.com/search']
+    #'https://www.cnnindonesia.com/', 'https://www.liputan6.com/']
+    news_portal = ['https://search.kompas.com/search', 'https://www.detik.com/search/searchall', 'https://www.tempo.co/search']
     scraper = NewsScraper(base_urls=news_portal)
     news_urls = scraper.get_news_urls(search_terms='purbaya', last_date='2025-10-16')
-    scraper.get_news(news_urls)
+    for url in news_urls:
+        print(url)
+    # scraper.get_news(news_urls)
