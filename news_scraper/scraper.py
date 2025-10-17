@@ -61,10 +61,10 @@ class NewsScraper:
                         print(f"Error fetching {url}: {e}")
                         raise
 
-    async def fetch_with_retries(self, url, params, payload=None):
+    async def fetch_with_retries(self, url, params=None, payload=None):
         for attempt in range(self.max_retries):
             try:
-                return await self.fetch(url, params, payload=payload)
+                return await self.fetch(url, params=params, payload=payload)
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed for {url}: {e}")
                 if attempt == self.max_retries - 1:
@@ -105,6 +105,27 @@ class NewsScraper:
                 }
 
                 url = 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query'
+            elif url == 'https://www.cnnindonesia.com/search':
+                params = {
+                    'query': search_terms,
+                    'idtype': 1,
+                    'start': 0,
+                    'limit': 200,
+                    'fromdate': datetime.strptime(last_date, '%Y-%m-%d').strftime('%Y/%m/%d'),
+                    'todate': (datetime.strptime(last_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y/%m/%d'),
+                }
+                url = 'https://www.cnnindonesia.com/api/v3/search'
+            elif url == 'https://www.liputan6.com/search':
+                params = {
+                    'q': search_terms,
+                    'order': 'latest',
+                    'channel_id': '',
+                    'from_date': datetime.strptime(last_date, '%Y-%m-%d').strftime('%d/%m/%Y'),
+                    'to_date': (datetime.strptime(last_date, '%Y-%m-%d') + timedelta(days=1)).strftime('%d/%m/%Y'),
+                    'type': 'all'
+                }
+            else:
+                params = {}    
             task = asyncio.create_task(self.fetch_with_retries(url, params, payload=payload))
             tasks.append(task)
 
@@ -120,19 +141,57 @@ class NewsScraper:
                 if html is None:
                     print(f"No data for {url} after retries.")
                     continue
-                tree = HTMLParser(html)
-                record = {}
-                record['source'] = 'kompas'
-                record['title'] = tree.css_first('title').text(strip=True)
-                record['url'] = url
-
-                try:
-                    record['published_at'] = tree.css_first('div.read__time').text(strip=True)
-                except AttributeError:
-                    record['published_at'] = tree.css_first('div.videoKG-date').text(strip=True)
-                
-                record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d %H:%M:%S')
-                records.append(record)
+                if 'kompas.com' in url:
+                    tree = HTMLParser(html)
+                    record = {}
+                    record['source'] = 'kompas'
+                    record['title'] = tree.css_first('title').text(strip=True)
+                    record['url'] = url
+                    record['published_at'] = tree.css_first('meta[name="content_PublishedDate"]').attributes.get('content', '')
+                    record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).isoformat()
+                    records.append(record)
+                elif 'detik.com' in url:
+                    tree = HTMLParser(html)
+                    record = {}
+                    record['source'] = 'detik'
+                    record['title'] = tree.css_first('h1.detail__title').text(strip=True)
+                    record['url'] = url
+                    record['published_at'] = tree.css_first('meta[itemprop="datePublished"]').attributes.get('content', '')
+                    record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).isoformat()
+                    records.append(record)
+                elif 'tempo.co' in url:
+                    tree = HTMLParser(html)
+                    record = {}
+                    record['source'] = 'tempo'
+                    data = tree.css_first('script[type="application/ld+json"]').text(strip=True)
+                    json_data = json.loads(data)
+                    record['title'] = json_data.get('headline', '')
+                    record['url'] = url
+                    record['published_at'] = json_data.get('datePublished', '')
+                    record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).isoformat()
+                    records.append(record)
+                elif 'cnnindonesia.com' in url:
+                    tree = HTMLParser(html)
+                    record = {}
+                    record['source'] = 'cnnindonesia'
+                    data = tree.css_first('script[type="application/ld+json"]').text(strip=True)
+                    json_data = json.loads(data)
+                    record['title'] = json_data.get('headline', '')
+                    record['url'] = url
+                    record['published_at'] = json_data.get('datePublished', '')
+                    record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).isoformat()
+                    records.append(record)
+                elif 'liputan6.com' in url:
+                    tree = HTMLParser(html)
+                    record = {}
+                    record['source'] = 'liputan6'
+                    record['title'] = tree.css_first('meta[property="og:title"]').attributes.get('content', '')
+                    record['url'] = url
+                    record['published_at'] = tree.css_first('meta[property="article:published_time"]').attributes.get('content', '')
+                    record['scraped_at'] = datetime.now(timezone(timedelta(hours=7))).isoformat()
+                    records.append(record)
+                else:
+                    continue
             
             daily_records = pd.DataFrame(records)
             os.makedirs('data', exist_ok=True)
@@ -163,12 +222,19 @@ class NewsScraper:
         elif result[0] == 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query':
             news_elems = json.loads(result[1]).get('hits', [])
 
+        elif result[0] == 'https://www.cnnindonesia.com/api/v3/search':
+            news_elems = json.loads(result[1]).get('data', [])
+        elif result[0] == 'https://www.liputan6.com/search':
+            tree = HTMLParser(result[1])
+            news_elems = tree.css('a.headline__item')
         else:
             print('under construction')
 
         for elem in news_elems:
             if result[0] == 'https://u2ciazrcad-1.algolianet.com/1/indexes/production_articles/query':
-                news_url = urljoin('https://www.tempo.co/', elem.get('canonical_url'))
+                news_url = urljoin('https://www.tempo.co/', elem.get('canonical_url', ''))
+            elif result[0] == 'https://www.cnnindonesia.com/api/v3/search':
+                news_url = elem.get('url', '')
             else:
                 news_url = elem.attributes.get('href')
             news_urls.append(news_url)
@@ -184,10 +250,9 @@ class NewsScraper:
         asyncio.run(scraper.fetch_all(news_urls, mode='news'))
 
 if __name__ == '__main__':
-    #'https://www.cnnindonesia.com/', 'https://www.liputan6.com/']
-    news_portal = ['https://search.kompas.com/search', 'https://www.detik.com/search/searchall', 'https://www.tempo.co/search']
+    news_portal = ['https://search.kompas.com/search', 'https://www.detik.com/search/searchall', 'https://www.tempo.co/search', 'https://www.cnnindonesia.com/search', 'https://www.liputan6.com/search']
+    search_terms = 'purbaya'
+    last_date = (datetime.now(timezone(timedelta(hours=7))) + timedelta(days=-1)).strftime('%Y-%m-%d')
     scraper = NewsScraper(base_urls=news_portal)
-    news_urls = scraper.get_news_urls(search_terms='purbaya', last_date='2025-10-16')
-    for url in news_urls:
-        print(url)
-    # scraper.get_news(news_urls)
+    news_urls = scraper.get_news_urls(search_terms=search_terms, last_date=last_date)
+    scraper.get_news(news_urls)
