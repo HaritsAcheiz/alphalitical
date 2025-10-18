@@ -1,5 +1,7 @@
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import os
+
 
 def convert_to_iso(source: str, date_str: str, scraped_at: str) -> str:
     try:
@@ -38,6 +40,7 @@ if __name__ == "__main__":
     records = pd.read_csv(
         f'data/staging/news_{datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")}.csv')
     records['published_at'] = records.apply(lambda x: convert_to_iso(x['source'], x['published_at'], x['scraped_at']), axis=1)
+    os.makedirs('data/transformed', exist_ok=True)
     records.to_parquet(
         f'data/transformed/news_{datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")}.parquet',
         index=False,

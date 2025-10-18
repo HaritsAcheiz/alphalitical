@@ -2,6 +2,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import sqlite3
+import os
 
 
 def peek_db(db_path="data/storage/news_articles.db"):
@@ -56,6 +57,7 @@ def peek_db(db_path="data/storage/news_articles.db"):
 
 
 if __name__ == "__main__":
+    os.makedirs('data/storage', exist_ok=True)
     DB_PATH = 'data/storage/news_articles.db'
     records = pd.read_parquet(
         f'data/transformed/news_{datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")}.parquet',

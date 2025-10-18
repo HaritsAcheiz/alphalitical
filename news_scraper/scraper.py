@@ -194,7 +194,7 @@ class NewsScraper:
                     continue
             
             daily_records = pd.DataFrame(records)
-            os.makedirs('data', exist_ok=True)
+            os.makedirs('data/staging', exist_ok=True)
             daily_records.to_csv(
                 f'data/staging/news_{datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d")}.csv',
                 mode='w',
